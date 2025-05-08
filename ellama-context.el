@@ -51,6 +51,46 @@
   :group 'ellama
   :type 'integer)
 
+(defcustom ellama-context-fences nil
+  "Alist of context fences to be wrapped around context elements in prompts.
+
+A fence is a `(cons prefix suffix)'.
+PREFIX and SUFFIX are formatted strings.
+
+Placeholders available depends on the context element type:
+
+`buffer':
+%n  Buffer name
+%m  Buffer `major-mode'
+
+`buffer-quote':
+%n  Buffer name
+%m  Buffer `major-mode'
+
+`file':
+%n  File name
+%d  File directory
+
+`file-quote':
+%n  File name
+%d  File directory
+"
+  :group 'ellama
+  :type '(alist
+	  :key-type (choice
+		     (const :tag "Default" default)
+		     (const :tag "Top-level" top)
+		     (const :tag "Text" text)
+		     (const :tag "Buffer" buffer)
+		     (const :tag "Buffer quote" buffer-quote)
+		     (const :tag "File" file)
+		     (const :tag "File quote" file-quote)
+		     (const :tag "Info node" info-node)
+		     (const :tag "Info node quote" info-node-quote)
+		     (const :tag "Webpage quote" webpage-quote)
+		     )
+	  :value-type (cons (string :tag "Prefix") (string :tag "Suffix"))))
+
 (defface ellama-context-line-face '((t (:inherit (mode-line-buffer-id ellama-face))))
   "Face for ellama context line."
   :group 'ellama)
@@ -327,6 +367,10 @@ the context."
 (cl-defgeneric ellama-context-element-extract (element)
   "Extract the content of the context ELEMENT.")
 
+(cl-defgeneric ellama-context-element-extract-fence (_element)
+  "Returns two strings (before . after) to wrap extracted ELEMENT."
+  :default (alist-get 'default ellama-context-fences))
+
 (cl-defgeneric ellama-context-element-display (element)
   "Display the context ELEMENT.")
 
@@ -375,6 +419,15 @@ the context."
 			data)))
 	content))))
 
+(cl-defmethod ellama-context-element-extract-fence ((element ellama-context-element-buffer))
+  (with-slots (name) element
+    (when (buffer-live-p (get-buffer name))
+      (with-current-buffer name
+	(let* ((fence (alist-get 'buffer ellama-context-fences))
+	       (spec `((?n . ,name) (?m . ,(symbol-name major-mode)))))
+	  (cons (format-spec (or (car fence) "") spec)
+		(format-spec (or (cdr fence) "") spec)))))))
+
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-buffer))
   "Display the context ELEMENT."
@@ -406,6 +459,15 @@ the context."
   ((element ellama-context-element-buffer-quote))
   "Extract the content of the context ELEMENT."
   (oref element content))
+
+(cl-defmethod ellama-context-element-extract-fence ((element ellama-context-element-buffer-quote))
+  (with-slots (name) element
+    (when (buffer-live-p (get-buffer name))
+      (with-current-buffer name
+	(let* ((fence (alist-get 'buffer-quote ellama-context-fences))
+	       (spec `((?n . ,name) (?m . ,(symbol-name major-mode)))))
+	  (cons (format-spec (or (car fence) "") spec)
+		(format-spec (or (cdr fence) "") spec)))))))
 
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-buffer-quote))
@@ -457,6 +519,13 @@ the context."
 	(if (string= ext "org")
 	    (ellama-convert-org-to-md data)
 	  data)))))
+
+(cl-defmethod ellama-context-element-extract-fence ((element ellama-context-element-file))
+  (let* ((fence (alist-get 'file ellama-context-fences))
+	 (fn (oref element name))
+	 (spec `((?n . ,(file-name-nondirectory fn))
+		 (?d . ,(file-name-directory fn)))))
+    (cons (format-spec (or (car fence) "") spec) (format-spec (or (cdr fence) "") spec))))
 
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-file))
@@ -699,19 +768,23 @@ the context."
    (content :initarg :content :type string))
   "A structure for holding information about a context element.")
 
-(cl-defmethod ellama-context-element-extract
-  ((element ellama-context-element-file-quote))
+(cl-defmethod ellama-context-element-extract ((element ellama-context-element-file-quote))
   "Extract the content of the context ELEMENT."
   (oref element content))
 
-(cl-defmethod ellama-context-element-display
-  ((element ellama-context-element-file-quote))
+(cl-defmethod ellama-context-element-extract-fence ((element ellama-context-element-file-quote))
+  (let* ((fence (alist-get 'file ellama-context-fences))
+	 (fn (oref element path))
+	 (spec `((?n . ,(file-name-nondirectory fn))
+		 (?d . ,(file-name-directory fn)))))
+    (cons (format-spec (or (car fence) "") spec) (format-spec (or (cdr fence) "") spec))))
+
+(cl-defmethod ellama-context-element-display ((element ellama-context-element-file-quote))
   "Display the context ELEMENT."
   (with-slots (path) element
     (file-name-nondirectory path)))
 
-(cl-defmethod ellama-context-element-format
-  ((element ellama-context-element-file-quote) (mode (eql 'markdown-mode)))
+(cl-defmethod ellama-context-element-format ((element ellama-context-element-file-quote) (mode (eql 'markdown-mode)))
   "Format the context ELEMENT for the major MODE."
   (ignore mode)
   (with-slots (path content) element
@@ -911,21 +984,22 @@ For one request only if EPHEMERAL."
 		"\n\n")
       "")))
 
-;;;###autoload
-(defun ellama-context-prompt-with-context (prompt)
-  "Add context to PROMPT for sending to llm."
-  (let* ((context (append ellama-context-global
-			  ellama-context-ephemeral)))
-    (if context
-	(prog1
-	    (concat (string-join
-		     (cons "Context:"
-			   (mapcar #'ellama-context-element-extract context))
-		     "\n")
-		    "\n\n"
-		    prompt)
-	  (setq ellama-context-ephemeral nil))
-      prompt)))
+(defun ellama-context-element-to-prompt (element)
+  "Format context ELEMENT to be included in a prompt for sending to llm."
+  (let ((content (ellama-context-element-extract element))
+	(fence (ellama-context-element-extract-fence element)))
+    (concat (car fence) content (cdr fence))))
+
+(defun ellama-context-to-prompt (context)
+  "Format CONTEXT elements to be included in a prompt for sending to llm."
+  (when context
+    (let ((fence (alist-get 'top ellama-context-fences
+			    (alist-get 'default ellama-context-fences))))
+      (string-join
+       (append (ensure-list (car fence))
+	       (mapcar #'ellama-context-element-to-prompt context)
+	       (ensure-list (cdr fence)))
+       "\n"))))
 
 (provide 'ellama-context)
 ;;; ellama-context.el ends here.

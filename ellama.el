@@ -1387,6 +1387,9 @@ REASONING-BUFFER is a buffer for reasoning."
 	      (concat "</think>\n" (string-trim text))
 	    (string-trim text))))))))
 
+(defvar ellama-context-global)
+(defvar ellama-context-ephemeral)
+
 (defun ellama-stream (prompt &rest args)
   "Query ellama for PROMPT.
 ARGS contains keys for fine control.
@@ -1417,7 +1420,7 @@ failure (with BUFFER current).
  the full response text when the request completes (with BUFFER current)."
   (declare-function spinner-start "ext:spinner")
   (declare-function spinner-stop "ext:spinner")
-  (declare-function ellama-context-prompt-with-context "ellama-context")
+  (declare-function ellama-context-to-prompt "ellama-context")
   (let* ((session-id (plist-get args :session-id))
 	 (session (or (plist-get args :session)
 		      (when session-id
@@ -1441,23 +1444,31 @@ failure (with BUFFER current).
 		    (lambda (msg)
 		      (error "Error calling the LLM: %s" msg))))
 	 (donecb (or (plist-get args :on-done) #'ignore))
-	 (prompt-with-ctx (ellama-context-prompt-with-context prompt))
-	 (system (or (plist-get args :system)
-		     ellama-global-system))
+	 (system-with-global-ctx
+	  (string-join
+	   (append (ensure-list (or (plist-get args :system) ellama-global-system))
+		   (ensure-list (ellama-context-to-prompt ellama-context-global)))
+	   "\n"))
+	 (prompt-with-ephemeral-ctx
+	  (prog1
+	      (string-join
+	       (append (ensure-list (ellama-context-to-prompt ellama-context-ephemeral))
+		       (ensure-list prompt))
+	       "\n")
+	    (setq ellama-context-ephemeral nil)))
 	 (llm-prompt (if session
-			 (if (llm-chat-prompt-p (ellama-session-prompt session))
-			     (progn
-			       (llm-chat-prompt-append-response
-				(ellama-session-prompt session)
-				prompt-with-ctx)
-			       (when system
-				 (llm-chat-prompt-append-response
-				  (ellama-session-prompt session)
-				  system 'system))
-			       (ellama-session-prompt session))
+			 (if-let ((sp (ellama-session-prompt session)))
+			     (prog1 sp
+			       (when-let ((i (car (llm-chat-prompt-interactions sp)))
+					  ((eq (llm-chat-prompt-interaction-role i) 'system)))
+				 (pop (llm-chat-prompt-interactions sp)))
+			       (setf (llm-chat-prompt-context sp) system-with-global-ctx)
+			       (llm-chat-prompt-append-response sp prompt-with-ephemeral-ctx))
 			   (setf (ellama-session-prompt session)
-				 (llm-make-chat-prompt prompt-with-ctx :context system)))
-		       (llm-make-chat-prompt prompt-with-ctx :context system))))
+				 (llm-make-chat-prompt prompt-with-ephemeral-ctx
+						       :context system-with-global-ctx)))
+		       (llm-make-chat-prompt prompt-with-ephemeral-ctx
+					     :context system-with-global-ctx))))
     (with-current-buffer reasoning-buffer
       (org-mode))
     (with-current-buffer buffer
@@ -1929,8 +1940,6 @@ the full response text when the request completes (with BUFFER current)."
      prompt
      t
      :system system)))
-
-(defvar ellama-context-global)
 
 ;;;###autoload
 (defun ellama-chat-send-last-message ()
