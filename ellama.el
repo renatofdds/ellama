@@ -646,24 +646,50 @@ Skip code blocks and math environments."
 	(buffer-substring-no-properties (point-min) (point-max))
       (kill-buffer (current-buffer)))))
 
+(defconst ellama--rx-gfm-code-block-open "^\\(?1:[[:blank:]]*\\)\\(?2:```\\)\\(?3:[[:blank:]]*{?[[:blank:]]*\\)\\(?4:[^`[:space:]]+?\\)?\\(?:[[:blank:]]+\\(?6:.+?\\)\\)?\\(?6:[[:blank:]]*}?[[:blank:]]*\\)$"
+  "Regular expression matching opening of GFM code blocks.
+Group 1 matches the any leading whitespace.
+Group 2 matches the opening three backquotes and any following whitespace.
+Group 3 matches the opening brace (optional) and surrounding whitespace.
+Group 4 matches the language identifier (optional).
+Group 5 matches the info string (optional).
+Group 6 matches the closing brace (optional), whitespace, and newline.
+")
+
+(defconst ellama--rx-gfm-code-block-close
+  "^\\(?1:[[:blank:]]*\\)\\(?2:```\\)\\(?3:\\s *?\\)$"
+  "Regular expression matching closing of GFM code blocks.
+Group 1 matches the any leading whitespace.
+Group 2 matches the closing three backquotes.
+Group 3 matches any whitespace and the final newline.")
+
 (defun ellama--translate-markdown-to-org-filter (text)
   "Filter to translate code blocks from markdown syntax to org syntax in TEXT.
 This filter contains only subset of markdown syntax to be good enough."
   (thread-last
     text
-    ;; code blocks
-    (replace-regexp-in-string "^[[:space:]]*```\\(.+\\)$" "#+BEGIN_SRC \\1")
-    (replace-regexp-in-string "^\\(.+\\)```\\([A-Za-z0-9\\-]+\\)$" "\\1\n#+BEGIN_SRC \\2")
-    (replace-regexp-in-string "^\\(.+\\)```\\(.+\\)$" "\\1\n#+END_SRC\n\\2")
-    (ellama--replace-first-begin-src)
-    (replace-regexp-in-string "^<!-- language: \\(.+\\) -->\n```" "#+BEGIN_SRC \\1")
-    (replace-regexp-in-string "^[[:space:]]*```$" "#+END_SRC")
-    (replace-regexp-in-string "^[[:space:]]*```" "#+END_SRC\n")
-    (replace-regexp-in-string "```" "\n#+END_SRC\n")
-    (replace-regexp-in-string "<think>[\n]?" "#+BEGIN_QUOTE\n")
-    (replace-regexp-in-string "[\n]?</think>[\n]?" "\n#+END_QUOTE\n")
+    (replace-regexp-in-string "^<!-- language: \\(.+\\) -->\n+```" "```\\1")
+    (ellama--replace-blocks
+     (cons ellama--rx-gfm-code-block-open "\\1#+BEGIN_SRC \\4")
+     (cons ellama--rx-gfm-code-block-close "\\1#+END_SRC")
+     )
+    (ellama--replace-blocks
+     (cons "[ \t\n\r]*<think>[ \t\n\r]*" "\n\n#+BEGIN_QUOTE\n")
+     (cons "[ \t\n\r]*</think>[ \t\n\r]*" "\n#+END_QUOTE\n\n")
+     )
     (ellama--replace-bad-code-blocks)
-    (ellama--replace-outside-of-code-blocks)))
+    (ellama--replace-outside-of-code-blocks)
+    ))
+
+(cl-defun ellama--replace-blocks ((open-rx . open-replacement) (close-rx . close-replacement) text)
+  (with-temp-buffer
+    (save-excursion (insert text))
+    (while (re-search-forward open-rx nil t)
+      (replace-match open-replacement t)
+      (when (re-search-forward close-rx nil t)
+	(replace-match close-replacement t)))
+    (buffer-string))
+  )
 
 (defcustom ellama-enable-keymap t
   "Enable or disable Ellama keymap."
