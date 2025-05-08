@@ -326,6 +326,10 @@ the context."
 (cl-defgeneric ellama-context-element-extract (element)
   "Extract the content of the context ELEMENT.")
 
+(cl-defgeneric ellama-context-element-extract-fence (_element)
+  "Returns two strings (before . after) to wrap extracted ELEMENT."
+  :default (cons "<AI:context_item>\n" "\n</AI:context_item>"))
+
 (cl-defgeneric ellama-context-element-display (element)
   "Display the context ELEMENT.")
 
@@ -367,6 +371,14 @@ the context."
 			data)))
 	content))))
 
+(cl-defmethod ellama-context-element-extract-fence
+  ((element ellama-context-element-buffer))
+  (with-slots (name) element
+    (when (buffer-live-p name)
+      (with-current-buffer name
+				(cons (format "<AI:context_item type=\"emacs_buffer\" name=\"%s\" mode=\"%s\">\n" name major-mode)
+							"\n</AI:context_item>")))))
+
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-buffer))
   "Display the context ELEMENT."
@@ -398,6 +410,13 @@ the context."
   ((element ellama-context-element-buffer-quote))
   "Extract the content of the context ELEMENT."
   (oref element content))
+
+(cl-defmethod ellama-context-element-extract-fence
+  ((element ellama-context-element-buffer-quote))
+  (with-slots (name) element
+    (with-current-buffer name
+      (cons (format "<AI:context_item type=\"emacs_buffer_quote\" name=\"%s\" mode=\"%s\">\n" name major-mode)
+						"\n</AI:context_item>"))))
 
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-buffer-quote))
@@ -444,6 +463,10 @@ the context."
 	(if (string= ext "org")
 	    (ellama-convert-org-to-md data)
 	  data)))))
+
+(cl-defmethod ellama-context-element-extract-fence
+  ((element ellama-context-element-file))
+  (cons (format "<AI:context_item type=\"file\" name=\"%s\">\n" (file-name-nondirectory (oref element name))) "\n</AI:context_item>"))
 
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-file))
@@ -681,6 +704,10 @@ the context."
   "Extract the content of the context ELEMENT."
   (oref element content))
 
+(cl-defmethod ellama-context-element-extract-fence
+  ((element ellama-context-element-file-quote))
+  (cons (format "<AI:context_item type=\"file_quote\" path=\"%s\">\n" (oref element path)) "\n</AI:context_item>"))
+
 (cl-defmethod ellama-context-element-display
   ((element ellama-context-element-file-quote))
   "Display the context ELEMENT."
@@ -892,10 +919,14 @@ For one request only if EPHEMERAL."
     (if context
 	(prog1
 	    (concat (string-join
-		     (cons "Context:"
-			   (mapcar #'ellama-context-element-extract context))
-		     "\n")
-		    "\n\n"
+		     (cons "\n<AI:context>\n"
+			   (mapcar
+			    (lambda (e) (let ((content (ellama-context-element-extract e))
+					 (fence (ellama-context-element-extract-fence e)))
+				     (concat (car fence) content (cdr fence))))
+			    context))
+		     "\n\n")
+		    "\n\n</AI:context>\n\n"
 		    prompt)
 	  (setq ellama-context-ephemeral nil))
       prompt)))
