@@ -39,6 +39,7 @@
 (require 'llm)
 (require 'llm-provider-utils)
 (require 'compat)
+(require 'map)
 (eval-when-compile (require 'rx))
 
 (defgroup ellama nil
@@ -1348,38 +1349,20 @@ FILTER is a function for text transformation."
 			  (setq safe-common-prefix (ellama--string-without-last-two-lines common-prefix))
 			  (setq previous-filtered-text filtered-text))))))))))))
 
-(defun ellama--handle-partial (insert-text insert-reasoning reasoning-buffer)
-  "Handle partial LLM callback.
-INSERT-TEXT is a function for text insertion.
-INSERT-REASONING is a function for reasoning insertion.
-REASONING-BUFFER is a buffer for reasoning."
-  (lambda (response)
-    (let ((text (plist-get response :text))
-	  (reasoning (plist-get response :reasoning)))
-      (funcall
-       insert-text
-       (concat
-	(when reasoning
-	  (if
-	      (or (not ellama-output-remove-reasoning)
-		  ellama--current-session)
-	      (concat "<think>\n" reasoning)
-	    (progn
-	      (with-current-buffer reasoning-buffer
-		(funcall insert-reasoning reasoning)
-		(when ellama-show-reasoning
-		  (display-buffer
-		   reasoning-buffer
-		   (when ellama-reasoning-display-action-function
-		     `((ignore . (,ellama-reasoning-display-action-function)))))))
-	      nil)))
-	(when text
-	  (if (and reasoning ellama--current-session)
-	      (concat "</think>\n" (string-trim text))
-	    (string-trim text))))))))
-
 (defvar ellama-context-global)
 (defvar ellama-context-ephemeral)
+
+(defun ellama-format-tool-use (tool-use)
+  (unless (llm-provider-utils-tool-use-p tool-use)
+    (error "format-tool-use: invalid argument type: %s" (type-of tool-use)))
+  (format
+   "[%s (%s)]"
+   (llm-provider-utils-tool-use-name tool-use)
+   (mapconcat
+    (pcase-lambda (`(,arg . ,value))
+      (format "%s: %s" arg (truncate-string-to-width value 25 nil nil t)))
+    (llm-provider-utils-tool-use-args tool-use)
+    ", ")))
 
 (defun ellama-stream (prompt &rest args)
   "Query ellama for PROMPT.
@@ -1404,14 +1387,18 @@ file by default.
 
 :system STR -- send STR to model as system message.
 
+:tools TOOLS -- Provide TOOLS.
+
 :on-error ON-ERROR -- ON-ERROR a function that's called with an error message on
 failure (with BUFFER current).
 
 :on-done ON-DONE -- ON-DONE a function or list of functions that's called with
- the full response text when the request completes (with BUFFER current)."
+ the full response text when the request completes (with BUFFER current).
+"
   (declare-function spinner-start "ext:spinner")
   (declare-function spinner-stop "ext:spinner")
   (declare-function ellama-context-to-prompt "ellama-context")
+  (when ellama-spinner-enabled (require 'spinner))
   (let* ((session-id (plist-get args :session-id))
 	 (session (or (plist-get args :session)
 		      (when session-id
@@ -1447,6 +1434,7 @@ failure (with BUFFER current).
 		       (ensure-list prompt))
 	       "\n")
 	    (setq ellama-context-ephemeral nil)))
+	 (tools (plist-get args :tools))
 	 (llm-prompt (if session
 			 (if-let ((sp (ellama-session-prompt session)))
 			     (prog1 sp
@@ -1456,59 +1444,107 @@ failure (with BUFFER current).
 			       (setf (llm-chat-prompt-context sp) system-with-global-ctx)
 			       (llm-chat-prompt-append-response sp prompt-with-ephemeral-ctx))
 			   (setf (ellama-session-prompt session)
-				 (llm-make-chat-prompt prompt-with-ephemeral-ctx
-						       :context system-with-global-ctx)))
-		       (llm-make-chat-prompt prompt-with-ephemeral-ctx
-					     :context system-with-global-ctx))))
+				 (llm-make-chat-prompt
+				  prompt-with-ephemeral-ctx
+				  :context system-with-global-ctx
+				  :tools tools)))
+		       (llm-make-chat-prompt
+			prompt-with-ephemeral-ctx
+			:context system-with-global-ctx
+			:tools tools))))
     (with-current-buffer reasoning-buffer
       (org-mode))
     (with-current-buffer buffer
       (ellama-request-mode +1)
-      (let* ((insert-text
-	      (ellama--insert buffer point filter))
-	     (insert-reasoning
-	      (ellama--insert reasoning-buffer nil #'ellama--translate-markdown-to-org-filter)))
+      (letrec ((insert-text
+		(ellama--insert buffer point filter))
+	       (insert-reasoning
+		(ellama--insert reasoning-buffer nil #'ellama--translate-markdown-to-org-filter))
+	       (partial-cb
+		(lambda (response)
+		  (with-current-buffer buffer
+		    (let ((reasoning (plist-get response :reasoning))
+			  (text (plist-get response :text))
+			  (tool-uses (plist-get response :tool-uses)))
+		      (when ellama-debug
+			(message "PARTIAL: %S" (map-keys response)))
+		      (when reasoning
+			(funcall insert-reasoning reasoning)
+			(when ellama-show-reasoning
+			  (display-buffer
+			   reasoning-buffer
+			   (when ellama-reasoning-display-action-function
+			     `((ignore . (,ellama-reasoning-display-action-function)))))))
+		      (funcall
+		       insert-text
+		       (concat
+			(when (and reasoning (or (not ellama-output-remove-reasoning) ellama--current-session))
+			  (concat "<think>\n" reasoning "</think>\n"))
+			(when tool-uses
+			  (mapconcat #'ellama-format-tool-use tool-uses "\n"))
+			(when text
+			  (string-trim text))))))))
+	       (response-cb
+		(lambda (response)
+		  (with-current-buffer buffer
+		    (when ellama-debug
+		      (message "RESPONSE: %S" response))
+		    (when ellama-spinner-enabled
+		      (spinner-stop))
+		    (when (or ellama--current-session
+			      (not (plist-get response :reasoning)))
+		      (kill-buffer reasoning-buffer))
+		    (cond
+		     ((plist-get response :tool-results)
+		      (funcall insert-text "\n")
+		      (funcall iterate))
+		     ((plist-get response :tool-uses)
+		      (funcall
+		       insert-text
+		       (mapconcat #'ellama-format-tool-use (plist-get response :tool-uses) "\n")))
+		     (t
+		      (let ((text (plist-get response :text)))
+			(funcall partial-cb response)
+			(accept-change-group ellama--change-group)
+			(when ellama-spinner-enabled
+			  (spinner-stop))
+			(if (and (listp donecb)
+				 (functionp (car donecb)))
+			    (mapc (lambda (fn) (funcall fn text))
+				  donecb)
+			  (funcall donecb text))
+			(when ellama-session-hide-org-quotes
+			  (ellama-collapse-org-quotes))
+			(setq ellama--current-request nil)
+			(ellama-request-mode -1)))))))
+	       (error-cb
+		(lambda (_ msg)
+		  (with-current-buffer buffer
+		    (when ellama-debug
+		      (message "ERROR: %S" msg))
+		    (cancel-change-group ellama--change-group)
+		    (when ellama-spinner-enabled
+		      (spinner-stop))
+		    (funcall errcb msg)
+		    (setq ellama--current-request nil)
+		    (ellama-request-mode -1))))
+	       (iterate
+		(lambda ()
+		  (with-current-buffer buffer
+		    (when ellama-debug
+		      (message
+		       "ITERATE: %S"
+		       (last (llm-chat-prompt-interactions llm-prompt))))
+		    (when ellama-spinner-enabled
+		      (spinner-start ellama-spinner-type))
+		    (setq ellama--current-request
+			  (llm-chat-streaming
+			   provider llm-prompt
+			   partial-cb response-cb error-cb
+			   t))))))
 	(setq ellama--change-group (prepare-change-group))
 	(activate-change-group ellama--change-group)
-	(when ellama-spinner-enabled
-	  (require 'spinner)
-	  (spinner-start ellama-spinner-type))
-	(let* ((handler (ellama--handle-partial insert-text insert-reasoning reasoning-buffer))
-	       (request (llm-chat-streaming
-			 provider
-			 llm-prompt
-			 handler
-			 (lambda (response)
-			   (let ((text (plist-get response :text))
-				 (reasoning (plist-get response :reasoning)))
-			     (funcall handler response)
-			     (when (or ellama--current-session
-				       (not reasoning))
-			       (kill-buffer reasoning-buffer))
-			     (with-current-buffer buffer
-			       (accept-change-group ellama--change-group)
-			       (when ellama-spinner-enabled
-				 (spinner-stop))
-			       (if (and (listp donecb)
-					(functionp (car donecb)))
-				   (mapc (lambda (fn) (funcall fn text))
-					 donecb)
-				 (funcall donecb text))
-			       (when ellama-session-hide-org-quotes
-				 (ellama-collapse-org-quotes))
-			       (setq ellama--current-request nil)
-			       (ellama-request-mode -1))))
-			 (lambda (_ msg)
-			   (with-current-buffer buffer
-			     (cancel-change-group ellama--change-group)
-			     (when ellama-spinner-enabled
-			       (spinner-stop))
-			     (funcall errcb msg)
-			     (setq ellama--current-request nil)
-			     (ellama-request-mode -1)))
-			 t)))
-	  (with-current-buffer buffer
-	    (setq ellama--current-request request)))))))
+	(funcall iterate)))))
 
 (defun ellama-chain (initial-prompt forms &optional acc)
   "Call chain of FORMS on INITIAL-PROMPT.
@@ -1765,6 +1801,8 @@ ARGS contains keys for fine control.
 
 :system STR -- send STR to model as system message.
 
+:tools TOOLS -- Provide TOOLS.
+
 :ephemeral BOOL -- create an ephemeral session if set.
 
 :on-done ON-DONE -- ON-DONE a function that's called with
@@ -1776,6 +1814,7 @@ the full response text when the request completes (with BUFFER current)."
 		     ellama-providers))
 	 (variants (mapcar #'car providers))
 	 (system (plist-get args :system))
+	 (tools (plist-get args :tools))
 	 (donecb (plist-get args :on-done))
 	 (provider (if current-prefix-arg
 		       (eval (alist-get
@@ -1838,6 +1877,7 @@ the full response text when the request completes (with BUFFER current)."
 	  (ellama-stream prompt
 			 :session session
 			 :system system
+			 :tools tools
 			 :on-done (if donecb (list 'ellama-chat-done donecb)
 				    'ellama-chat-done)
 			 :filter (when (derived-mode-p 'org-mode)
