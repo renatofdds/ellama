@@ -448,17 +448,20 @@ It should be a function with single argument generated text string."
   "Show quotes in chat context."
   :type 'boolean)
 
-(defcustom ellama-chat-display-action-function nil
+(defcustom ellama-chat-display-action '(nil . nil)
   "Display action function for `ellama-chat'."
-  :type 'function)
+  :type display-buffer--action-custom-type
+  :risky t)
 
-(defcustom ellama-instant-display-action-function nil
+(defcustom ellama-instant-display-action '(nil . nil)
   "Display action function for `ellama-instant'."
-  :type 'function)
+  :type display-buffer--action-custom-type
+  :risky t)
 
-(defcustom ellama-reasoning-display-action-function nil
+(defcustom ellama-reasoning-display-action '(nil . nil)
   "Display action function for reasoning."
-  :type 'function)
+  :type display-buffer--action-custom-type
+  :risky t)
 
 (defcustom ellama-show-reasoning t
   "Show reasoning in separate buffer if enabled."
@@ -1286,8 +1289,7 @@ REQUEST-CONTEXT is a request context."
         (ellama-session-mode +1)
         (ellama--register-session session buffer t)))
     (ellama-hide-quotes)
-    (display-buffer buffer (when ellama-chat-display-action-function
-                             `((ignore . (,ellama-chat-display-action-function)))))))
+    (display-buffer buffer ellama-chat-display-action)))
 
 ;;;###autoload
 (defun ellama-session-delete ()
@@ -1331,8 +1333,7 @@ REQUEST-CONTEXT is a request context."
               (ellama--active-session-ids)))
          (buffer (ellama-get-session-buffer id)))
     (ellama-activate-session id)
-    (display-buffer buffer (when ellama-chat-display-action-function
-                             `((ignore . (,ellama-chat-display-action-function)))))))
+    (display-buffer buffer ellama-chat-display-action)))
 
 ;;;###autoload
 (defun ellama-session-kill ()
@@ -1659,8 +1660,7 @@ REASONING-BUFFER is a buffer for reasoning."
                 (when ellama-show-reasoning
                   (display-buffer
                    reasoning-buffer
-                   (when ellama-reasoning-display-action-function
-                     `((ignore . (,ellama-reasoning-display-action-function)))))))
+                   ellama-reasoning-display-action)))
               nil)))
         (when tool-results
           (format "\n<think>\n%s\n</think>\n"
@@ -2024,10 +2024,8 @@ last step only.
                  (or ellama--current-session-uid
                      ellama--current-session-id)))))
     (when show
-      (display-buffer buf (if chat (when ellama-chat-display-action-function
-                                     `((ignore . (,ellama-chat-display-action-function))))
-                            (when ellama-instant-display-action-function
-                              `((ignore . (,ellama-instant-display-action-function)))))))
+      (display-buffer buf (if chat ellama-chat-display-action
+                            ellama-instant-display-action)))
     (with-current-buffer buf
       (funcall ellama-major-mode))
     (if chat
@@ -2164,8 +2162,7 @@ Will call `ellama-chat-done-callback' and ON-DONE on TEXT."
   "Translate generated text into TRANSLATION-BUFFER."
   (lambda (generated)
     (ellama-chat-done generated)
-    (display-buffer translation-buffer (when ellama-chat-display-action-function
-                                         `((ignore . (,ellama-chat-display-action-function)))))
+    (display-buffer translation-buffer ellama-chat-display-action)
     (with-current-buffer translation-buffer
       (save-excursion
         (goto-char (point-max))
@@ -2189,8 +2186,7 @@ Will call `ellama-chat-done-callback' and ON-DONE on TEXT."
       (goto-char (point-max))
       (delete-char -2)
       (delete-char (- (length result))))
-    (display-buffer buffer (when ellama-chat-display-action-function
-                             `((ignore . (,ellama-chat-display-action-function)))))
+    (display-buffer buffer ellama-chat-display-action)
     (with-current-buffer buffer
       (save-excursion
         (goto-char (point-max))
@@ -2205,8 +2201,7 @@ Will call `ellama-chat-done-callback' and ON-DONE on TEXT."
 
 (defun ellama--translate-interaction (prompt translation-buffer buffer session)
   "Translate chat PROMPT in TRANSLATION-BUFFER for BUFFER with SESSION."
-  (display-buffer translation-buffer (when ellama-chat-display-action-function
-                                       `((ignore . (,ellama-chat-display-action-function)))))
+  (display-buffer translation-buffer ellama-chat-display-action)
   (with-current-buffer translation-buffer
     (save-excursion
       (goto-char (point-max))
@@ -2312,8 +2307,7 @@ the full response text when the request completes (with BUFFER current)."
         (add-hook 'org-ctrl-c-ctrl-c-hook #'ellama-chat-send-last-message 10 t)))
     (if ellama-chat-translation-enabled
         (ellama--translate-interaction prompt translation-buffer buffer session)
-      (display-buffer buffer (when ellama-chat-display-action-function
-                               `((ignore . (,ellama-chat-display-action-function)))))
+      (display-buffer buffer ellama-chat-display-action)
       (with-current-buffer buffer
         (save-excursion
           (goto-char (point-max))
@@ -2533,9 +2527,7 @@ ARGS contains keys for fine control.
          (system (plist-get args :system))
          (donecb (lambda (text)
                    (let ((callback (plist-get args :on-done)))
-                     (display-buffer buffer
-                                     (when ellama-instant-display-action-function
-                                       `((ignore . (,ellama-instant-display-action-function)))))
+                     (display-buffer buffer ellama-instant-display-action)
                      (when callback
                        (if (and (listp callback)
                                 (functionp (car callback)))
@@ -2547,8 +2539,7 @@ ARGS contains keys for fine control.
       (funcall ellama-major-mode)
       (when (derived-mode-p 'org-mode)
         (setq filter 'ellama--translate-markdown-to-org-filter)))
-    (display-buffer buffer (when ellama-instant-display-action-function
-                             `((ignore . (,ellama-instant-display-action-function)))))
+    (display-buffer buffer ellama-instant-display-action)
     (ellama-stream prompt
                    :system system
                    :buffer buffer

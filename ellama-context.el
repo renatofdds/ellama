@@ -201,10 +201,11 @@ the context."
       (add-to-list 'mode-line-format '(:eval (ellama-context-line)) t)
     (setq mode-line-format (delete '(:eval (ellama-context-line)) mode-line-format))))
 
-(defcustom ellama-context-manage-display-action-function #'display-buffer-same-window
+(defcustom ellama-context-manage-display-action `((display-buffer-same-window))
   "Display action function for `ellama-render-context'."
   :group 'ellama
-  :type 'function)
+  :type display-buffer--action-custom-type
+  :risky t)
 
 (defvar-keymap ellama-context-mode-map
   :doc "Local keymap for Ellama context mode buffers."
@@ -247,8 +248,7 @@ the context."
   (ellama-context-update-buffer)
   (display-buffer
    ellama-context-buffer
-   (when ellama-context-manage-display-action-function
-     `((ignore . (,ellama-context-manage-display-action-function))))))
+   ellama-context-manage-display-action))
 
 (defvar-keymap ellama-context-preview-mode-map
   :doc "Local keymap for Ellama preview context mode buffers."
@@ -266,10 +266,11 @@ the context."
                             'face 'ellama-key-face)
                 " to quit")))
 
-(defcustom ellama-context-preview-element-display-action-function nil
+(defcustom ellama-context-preview-element-display-action '(nil . nil)
   "Display action function for `ellama-context-preview-element'."
   :group 'ellama
-  :type 'function)
+  :type display-buffer--action-custom-type
+  :risky t)
 
 (defun ellama-context-preview-element (element)
   "Preview context ELEMENT content."
@@ -284,10 +285,7 @@ the context."
       (insert (ellama-context-element-extract element))
       (read-only-mode +1)
       (ellama-context-preview-mode +1)
-      (display-buffer
-       buf
-       (when ellama-context-preview-element-display-action-function
-         `((ignore . (,ellama-context-preview-element-display-action-function))))))))
+      (display-buffer buf ellama-context-preview-element-display-action))))
 
 (defun ellama-context-remove-element (element)
   "Remove context ELEMENT from global context."

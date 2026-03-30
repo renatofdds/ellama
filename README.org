@@ -110,8 +110,8 @@ More sophisticated configuration example:
     				      '(("num_ctx" . 32768))))
     ;; customize display buffer behaviour
     ;; see ~(info "(elisp) Buffer Display Action Functions")~
-    (setopt ellama-chat-display-action-function #'display-buffer-full-frame)
-    (setopt ellama-instant-display-action-function #'display-buffer-at-bottom)
+    (setopt ellama-chat-display-action `((display-buffer-full-frame)))
+    (setopt ellama-instant-display-action `((display-buffer-at-bottom)))
     :config
     ;; show ellama context in header line in all buffers
     (ellama-context-header-line-global-mode +1)
@@ -328,10 +328,8 @@ generated text string.
 - ~ellama-summarization-provider~: LLM summarization provider.
   ~ellama-provider~ will be used if not set.
 - ~ellama-show-quotes~: Show quotes content in chat buffer. Disabled by default.
-- ~ellama-chat-display-action-function~: Display action function for
-  ~ellama-chat~.
-- ~ellama-instant-display-action-function~: Display action function for
-  ~ellama-instant~.
+- ~ellama-chat-display-action-function~: Display action for ~ellama-chat~.
+- ~ellama-instant-display-action-function~: Display action for ~ellama-instant~.
 - ~ellama-translate-italic~: Translate italic during markdown to org
   transformations. Enabled by default.
 - ~ellama-extraction-provider~: LLM provider for data extraction.
@@ -351,10 +349,10 @@ generated text string.
   applications.
 - ~ellama-context-posframe-enabled~: Enable showing posframe with ellama
   context.
-- ~ellama-context-manage-display-action-function~: Display action function for
-  ~ellama-context-manage~. Default value ~display-buffer-same-window~.
-- ~ellama-context-preview-element-display-action-function~: Display action
-  function for ~ellama-context-preview-element~.
+- ~ellama-context-manage-display-action~: Display action for
+  ~ellama-context-manage~. Default value ~((display-buffer-same-window))~.
+- ~ellama-context-preview-element-display-action~: Display action for
+  ~ellama-context-preview-element~.
 - ~ellama-context-line-always-visible~: Make context header or mode line always
   visible, even with empty context.
 - ~ellama-community-prompts-url~: The URL of the community prompts collection.
@@ -363,8 +361,7 @@ generated text string.
   within your ~user-emacs-directory~.
 - ~ellama-show-reasoning~: Show reasoning in separate buffer if enabled. Enabled
   by default.
-- ~ellama-reasoning-display-action-function~: Display action function for
-  reasoning.
+- ~ellama-reasoning-display-action~: Display action for reasoning.
 - ~ellama-session-line-template~: Template for formatting the current session
   line.
 - ~ellama-debug~: Enable debug. When enabled, generated text is now logged to a
